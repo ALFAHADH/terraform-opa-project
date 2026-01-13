@@ -1,14 +1,50 @@
 package terraform.security
 
-warn contains msg if {
-    rc := input.resource_changes[_]
-    rc.type == "aws_security_group"
+############################################
+# 🔴 DENY — Hard block (security violations)
+############################################
+deny contains msg if {
+  r := input.planned_values.root_module.resources[_]
+  r.type == "aws_security_group"
 
-    rule := rc.change.after.ingress[_]
-    "0.0.0.0/0" in rule.cidr_blocks
+  ingress := r.values.ingress[_]
+  "0.0.0.0/0" in ingress.cidr_blocks
 
-    msg := sprintf(
-      "⚠️ Security Group %s allows traffic from 0.0.0.0/0. This is risky in production.",
-      [rc.name]
-    )
+  msg := sprintf(
+    "❌ BLOCKED: Security Group %s allows public ingress from 0.0.0.0/0",
+    [r.name]
+  )
 }
+
+############################################
+# 🟡 WARN — Soft control (visibility only)
+############################################
+warn contains msg if {
+  r := input.planned_values.root_module.resources[_]
+  r.type == "aws_security_group"
+
+  ingress := r.values.ingress[_]
+  "0.0.0.0/0" in ingress.cidr_blocks
+
+  msg := sprintf(
+    "⚠️ WARNING: Security Group %s is publicly accessible. This is risky in production.",
+    [r.name]
+  )
+}
+
+############################################
+# 🔵 INFO — Best practice advice
+############################################
+info contains msg if {
+  r := input.planned_values.root_module.resources[_]
+  r.type == "aws_security_group"
+
+  ingress := r.values.ingress[_]
+  "0.0.0.0/0" in ingress.cidr_blocks
+
+  msg := sprintf(
+    "ℹ️ INFO: Consider restricting SG %s to private CIDR or placing it behind an ALB + WAF.",
+    [r.name]
+  )
+}
+
