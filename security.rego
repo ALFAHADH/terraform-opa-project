@@ -1,50 +1,56 @@
-package terraform.security
+name: Terraform with OPA (DENY)
 
-############################################
-# 🔴 DENY — Hard block (security violations)
-############################################
-deny contains msg if {
-  r := input.planned_values.root_module.resources[_]
-  r.type == "aws_security_group"
+on:
+  push:
+    branches: [ "main" ]
 
-  ingress := r.values.ingress[_]
-  "0.0.0.0/0" in ingress.cidr_blocks
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
 
-  msg := sprintf(
-    "❌ BLOCKED: Security Group %s allows public ingress from 0.0.0.0/0",
-    [r.name]
-  )
-}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-############################################
-# 🟡 WARN — Soft control (visibility only)
-############################################
-warn contains msg if {
-  r := input.planned_values.root_module.resources[_]
-  r.type == "aws_security_group"
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-  ingress := r.values.ingress[_]
-  "0.0.0.0/0" in ingress.cidr_blocks
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v3
 
-  msg := sprintf(
-    "⚠️ WARNING: Security Group %s is publicly accessible. This is risky in production.",
-    [r.name]
-  )
-}
+    - name: Install OPA
+      run: |
+        curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+        chmod +x opa
+        sudo mv opa /usr/local/bin/opa
 
-############################################
-# 🔵 INFO — Best practice advice
-############################################
-info contains msg if {
-  r := input.planned_values.root_module.resources[_]
-  r.type == "aws_security_group"
+    - name: Terraform Init
+      run: terraform init
 
-  ingress := r.values.ingress[_]
-  "0.0.0.0/0" in ingress.cidr_blocks
+    - name: Terraform Plan
+      run: terraform plan -out=tfplan
 
-  msg := sprintf(
-    "ℹ️ INFO: Consider restricting SG %s to private CIDR or placing it behind an ALB + WAF.",
-    [r.name]
-  )
-}
+    - name: Convert Plan to JSON
+      run: terraform show -json tfplan > tf.json
+
+    - name: Run OPA DENY Policies
+      run: |
+        echo "🔍 Running OPA DENY checks..."
+
+        DENY=$(opa eval --format=raw --data security.rego --input tf.json "data.terraform.security.deny")
+
+        echo "$DENY"
+
+        if echo "$DENY" | grep -q "❌"; then
+          echo "🚫 OPA policy violations detected. Blocking Terraform."
+          exit 1
+        else
+          echo "✅ OPA checks passed. No blocking violations."
+        fi
+
+    - name: Terrafo
 
