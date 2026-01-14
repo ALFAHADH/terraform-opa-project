@@ -58,7 +58,7 @@ jobs:
         if: always()
         with:
           name: opa-report
-          path: opa.txt
+          path: opa.json
 
 
 
