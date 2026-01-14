@@ -2,59 +2,95 @@ name: Terraform with OPA Security Gate
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
 
 env:
   AWS_REGION: us-east-1
 
 jobs:
-  terraform:
+  plan-and-scan:
+    runs-on: ubuntu-latest
+
+    outputs:
+      warn_count: ${{ steps.opa.outputs.warn_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          sudo mv opa /usr/local/bin/
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - run: terraform init -input=false
+
+      - run: |
+          terraform plan -out=tfplan
+          terraform show -json tfplan > tfplan.json
+
+      - name: OPA Scan
+        id: opa
+        run: |
+          opa eval --format=json --data security.rego --input tfplan.json "data.terraform.security" > opa.json
+          cat opa.json
+
+          DENY=$(jq '.result[0].expressions[0].value.deny | length' opa.json)
+          WARN=$(jq '.result[0].expressions[0].value.warn | length' opa.json)
+
+          echo "warn_count=$WARN" >> $GITHUB_OUTPUT
+
+          if [ "$DENY" -gt 0 ]; then
+            echo "❌ SECURITY VIOLATION FOUND"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opa-report
+          path: opa.json
+
+
+  auto-apply:
+    needs: plan-and-scan
+    if: needs.plan-and-scan.outputs.warn_count == '0' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - run: terraform init
+      - run: terraform apply -auto-approve
 
-    - name: Install Terraform
-      uses: hashicorp/setup-terraform@v3
 
-    - name: Install OPA
-      run: |
-        curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
-        chmod +x opa
-        sudo mv opa /usr/local/bin/
+  approved-apply:
+    needs: plan-and-scan
+    if: needs.plan-and-scan.outputs.warn_count != '0' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: opa-warn-approval   # 👈 approval here
 
-    - name: Configure AWS
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - run: terraform init
+      - run: terraform apply -auto-approve
 
-    - name: Terraform Init
-      run: terraform init -input=false
-
-    - name: Terraform Plan
-      run: |
-        terraform plan -out=tfplan
-        terraform show -json tfplan > tfplan.json
-
-    - name: OPA Security Scan
-      run: |
-        echo "Running OPA security scan"
-        opa eval --format=pretty --data security.rego --input tfplan.json "data.terraform.security" > opa-report.txt
-        cat opa-report.txt
-
-        opa eval --data security.rego --input tfplan.json "data.terraform.security.deny" | grep -q "BLOCKED" && \
-        (echo "❌ SECURITY VIOLATION FOUND"; exit 1) || echo "✅ No blocking violations"
-
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve tfplan
-
-    - name: Upload OPA Report
-      uses: actions/upload-artifact@v4
-      with:
-        name: opa-security-report
-        path: opa-report.txt
