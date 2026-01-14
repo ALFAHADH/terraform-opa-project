@@ -1,15 +1,17 @@
-# Terraform
+# Terraform local files
 .terraform/
+*.tfstate
+*.tfstate.backup
 
-terraform.tfstate.*
-*.tfplan
+# Terraform plan & JSON
 tfplan
 tfplan.json
 tf.json
 
-# OS
-.DS_Store
-Thumbs.db
+# OPA outputs
+opa-report.txt
+opa-result.json
 
-# IDE
+# OS & editor
 .vscode/
+.DS_Store

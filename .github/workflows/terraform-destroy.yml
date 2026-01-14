@@ -1,26 +1,26 @@
-name: Destroy Terraform Infrastructure
+name: Terraform Destroy (Manual Approval)
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
+    environment:
+      name: production
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
+    - uses: hashicorp/setup-terraform@v3
+
+    - uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+        aws-region: us-east-1
 
-    - uses: hashicorp/setup-terraform@v3
-
-    - name: Terraform Init
-      run: terraform init
+    - run: terraform init
 
     - name: Terraform Destroy
       run: terraform destroy -auto-approve
